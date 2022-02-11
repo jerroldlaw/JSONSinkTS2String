@@ -44,5 +44,6 @@ public class JSONSinkTS2StringTest {
     final SourceRecord transformedRecord = xform.apply(record);
 
     System.out.println(transformedRecord.value().toString());
+    System.out.println(transformedRecord.value() instanceof String);
   }
 }

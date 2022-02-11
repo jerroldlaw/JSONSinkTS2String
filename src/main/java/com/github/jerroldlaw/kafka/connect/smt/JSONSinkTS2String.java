@@ -16,6 +16,9 @@
 
 package com.github.jerroldlaw.kafka.connect.smt;
 
+import org.apache.kafka.common.cache.Cache;
+import org.apache.kafka.common.cache.LRUCache;
+import org.apache.kafka.common.cache.SynchronizedCache;
 import org.apache.kafka.common.config.ConfigDef;
 import org.apache.kafka.connect.connector.ConnectRecord;
 import org.apache.kafka.connect.data.Schema;
@@ -28,24 +31,40 @@ import java.util.Map;
 public abstract class JSONSinkTS2String<R extends ConnectRecord<R>> implements Transformation<R> {
 
   public static final String OVERVIEW_DOC =
-    "Convert JSON to String.";
+    "Convert JSON to String with Sink timestamp.";
 
-  public static final ConfigDef CONFIG_DEF = new ConfigDef();
+  private interface ConfigName {
+    String PAYLOAD_FIELD = "payload.field";
+  }
 
-  private static final String PURPOSE = "Convert JSON to String.";
+  public static final ConfigDef CONFIG_DEF = new ConfigDef()
+          .define(ConfigName.PAYLOAD_FIELD, ConfigDef.Type.STRING, "", ConfigDef.Importance.HIGH,
+                  "Field name for Payload key name");
+
+  private static final String PURPOSE = "Convert JSON to String with Sink timestamp.";
+
+  private Cache<Schema, Schema> schemaUpdateCache;
+  private String payloadField;
 
   @Override
   public void configure(Map<String, ?> props) {
     final SimpleConfig config = new SimpleConfig(CONFIG_DEF, props);
+    payloadField = config.getString(ConfigName.PAYLOAD_FIELD);
+    schemaUpdateCache = new SynchronizedCache<>(new LRUCache<Schema, Schema>(16));
   }
 
   @Override
   public R apply(R record) {
-    System.out.println(record.value());
-    JSONObject jo = new JSONObject(record.value());
-    jo.getJSONObject("payload").put("sink_ts", System.currentTimeMillis());
+    JSONObject jo = new JSONObject(record.value().toString());
 
-    return newRecord(record, null, jo);
+    if (payloadField == "") {
+      jo.put("sink_ts", System.currentTimeMillis());
+    }
+    else {
+      jo.getJSONObject(payloadField).put("sink_ts", System.currentTimeMillis());
+    }
+
+    return newRecord(record, null, jo.toString());
   }
 
   @Override
@@ -55,12 +74,26 @@ public abstract class JSONSinkTS2String<R extends ConnectRecord<R>> implements T
 
   @Override
   public void close() {
-
+    schemaUpdateCache = null;
   }
+
+  protected abstract Schema operatingSchema(R record);
+
+  protected abstract Object operatingValue(R record);
 
   protected abstract R newRecord(R record, Schema updatedSchema, Object updatedValue);
 
   public static class Value<R extends ConnectRecord<R>> extends JSONSinkTS2String<R> {
+    @Override
+    protected Schema operatingSchema(R record) {
+      return record.valueSchema();
+    }
+
+    @Override
+    protected Object operatingValue(R record) {
+      return record.value();
+    }
+
     @Override
     protected R newRecord(R record, Schema updatedSchema, Object updatedValue) {
       return record.newRecord(record.topic(), record.kafkaPartition(), record.keySchema(), record.key(), updatedSchema, updatedValue, record.timestamp());
